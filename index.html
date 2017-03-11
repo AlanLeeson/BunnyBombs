@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+	<meta charset="utf-8"/>
+	
+	<title>Bunny Bombs</title>
+	
+	<link rel="stylesheet" href="../css/navigation.css" type="text/css">
+	<style>
+		*{
+			margin:0; 
+			padding:0;
+		}
+		body{
+			background:#D9E6CE;
+		}
+		
+		#container{
+			top:70px;
+			margin:0 auto;
+			min-width:500px;
+			width:65%;
+		}
+		
+		#mainCanvas {
+         background: #ffffff;
+         position:absolute;
+         z-index: 0;
+         left: 25%;
+         top: 70px;
+         box-shadow: 4px 4px 8px rgba(0,0,0,0.5);
+      }
+	  
+	  #topCanvas {
+         background: rgba(0,0,0,0);
+         position:absolute;
+         z-index: 1;
+         left: 25%;
+         top: 70px;
+         cursor: pointer;
+      }
+      
+	</style>
+	
+	<script>
+	(function(){
+	
+		var canvas, ctx, animationID;
+		var CANVAS_WIDTH = 640;
+		var CANVAS_HEIGHT = 480;
+		
+		var GRAVITY = 9.78;
+		
+		var GAME_STATE_BEGIN=0;
+		var GAME_STATE_DEFAULT=1;
+		var GAME_STATE_ROUND_OVER=2;
+		var GAME_STATE_ROUND_LOOSE=3;
+		var GAME_STATE_END=4;
+		var GAME_STATE_FAIL=5;
+		var LEVEL_0 = 0;
+		var LEVEL_1 = 1;
+		var LEVEL_2 = 2;
+		var LEVEL_3 = 3;
+		var LEVEL_4 = 4;
+		var LEVEL_5 = 5;
+		var level = LEVEL_0;
+		var gameState = GAME_STATE_DEFAULT;
+		
+		var INACTIVE_COLLISION = 0;
+		var ACTIVE_COLLISION = 1;
+		var TYPE_WEAK = 0;
+		var TYPE_STRONG = 1;
+		var TYPE_IMPOSSIBLE = 2;
+		var FILL_STYLE_WEAK = "#F4A460";
+		var FILL_STYLE_STRONG = "#5C3317";
+		var FILL_STYLE_IMPOSSIBLE = "black";
+		var ground = [];
+		var img = new Image();
+		
+		var tnts = [];
+		var tnt1;
+		
+		var collectables = [];
+		var collected = 0;
+		var totalCollected = 0;
+		var goal, goal1, goal2, goal3, goal4;
+		var bombsUsed = 0;
+		
+		var fireBlocks = [];
+		
+		var MAX_RADIUS = 60;
+		var EXPLOSION_SPEED = 3;
+		var IMPLOSION_SPEED = 5;
+		var WAIT_SPEED = 50;
+		var BOMB_STATE_WAITING = 0;
+		var BOMB_STATE_EXPLODING = 1;
+		var BOMB_STATE_IMPLODING = 2;
+		var bomb = {};
+		var parBombs = 0;
+		var allBombs = 0;
+		
+		//sound variables
+		var backgroundSound, bombExplosionSound, collectSound, tntExplosionSound, jumpSound;
+		
+		//variables for keyboard input
+		var keydown = [];
+		var KEYBOARD = {
+			"KEY_LEFT": 37,
+			"KEY_UP": 38,
+			"KEY_RIGHT": 39,
+			"KEY_DOWN": 40,
+			"KEY_SPACE": 32,
+			"KEY_R": 82
+		};
+	
+		window.onload = init;
+		
+		function init(){
+			topCanvas = document.querySelector('#topCanvas');
+			topctx = topCanvas.getContext('2d');
+		
+			canvas = document.querySelector('canvas');
+			ctx = canvas.getContext("2d");
+			
+			document.querySelector("#colorChange").onclick = changeColors;
+			
+			img.src = "images/background.jpg";
+			
+			bomb.active = false;
+			
+			ground = createFloor();
+			
+			loadLevel(level);
+			
+			canvas.onmousedown = doMousedown;
+		
+			window.onblur = function(){
+				
+			}
+			
+			window.onfocus = function(){
+				
+			}
+			
+			backgroundSound = new Audio('sound/background.mp3');
+			backgroundSound.volume = 0.1;
+			backgroundSound.loop = true;
+			bombExplosionSound = new Audio('sound/bombExplosion.wav');
+			collectSound = new Audio('sound/collect.wav');
+			tntExplosionSound = new Audio('sound/tntExplosion.wav');
+			jumpSound = new Audio('sound/jump.wav');
+			jumpSound.volume = 0.3;
+			
+			backgroundSound.play();
+			
+			bunny.init();
+			
+			update();
+		}
+		
+		//hookup keylisteners to handle character movement
+		window.addEventListener("keydown", function(e){
+			keydown[e.keyCode] = true;
+		});
+		window.addEventListener("keyup", function(e){
+			keydown[e.keyCode] = false;
+		});
+		
+		function update(){
+			topctx.clearRect(0, 0, topctx.canvas.width, topctx.canvas.height);
+			drawHUD();
+			
+			if(gameState === GAME_STATE_ROUND_OVER || gameState === GAME_STATE_ROUND_LOOSE
+				|| gameState === GAME_STATE_FAIL){
+				if(keydown[32]){
+					reset();
+				} else if(keydown[82]){
+					level--;
+					reset();
+				}
+			}else{
+			
+				drawBunny();
+				for(var i = 0; i < fireBlocks.length; i++){
+					if(fireBlocks[i].active){
+						fireBlockHandler(fireBlocks[i]);
+					}
+				}
+				checkForExplosion();
+			
+				for(var i = 0; i < tnts.length; i++){
+					tntExplosion(tnts[i]);
+				}
+			
+				for(var i = 0; i < collectables.length; i++){
+					if(collectables[i].active){
+						collectables[i].draw(topctx);
+					}
+				}
+	
+				checkGoal();
+				}
+				
+			animationID = requestAnimationFrame(update);
+		}
+		
+		function reset(){
+			gameState = GAME_STATE_DEFAULT;
+			bombsUsed = 0;
+			bomb.active = false;
+			bunny.hurt = false;
+			bunny.health = 3;
+			collectables = [];
+			tnts = [];
+			fireBlocks = [];
+			collected = 0;
+			loadLevel(level);
+		}
+		
+		function fireBlockHandler(f){
+			if(f.velocity == 0){
+				f.jump();
+			}
+			f.applyForce(GRAVITY-3);
+			f.update(0.1);
+			for(var i = 0; i < ground.length; i++){
+				//only if ground is not active collision
+				if(ground[i].state == INACTIVE_COLLISION){
+					continue;
+				}
+				//don't let bunny pass floor
+				if(collision(ground[i], f)){
+					f.x = f.prevLocationX;
+					f.y = f.prevLocationY;
+					f.velocity = 0;
+					break; //   ;)
+				}
+			}
+			if(collision(f,bunny)){
+				f.active = false;
+				bunny.hurt = true;
+			}
+			f.draw(topctx);
+		}
+		
+		//calls things necessary to draw bunny and clear background
+		function drawBunny(){
+			if(bunny.health <= 0){
+				gameState = GAME_STATE_ROUND_LOOSE; 
+				return;
+			}
+			//ctx.clearRect(0,0,canvas.width, canvas.height);
+			//topctx.clearRect(0, 0, topctx.canvas.width, topctx.canvas.height);
+			//drawFloor();
+			if(keydown[KEYBOARD.KEY_UP] && bunny.velocity == 0){
+				gameState = GAME_STATE_DEFAULT;
+				bunny.jump();
+				jumpSound.play();
+			}
+			else if(keydown[KEYBOARD.KEY_LEFT]){
+				gameState = GAME_STATE_DEFAULT;
+				bunny.moveLeft(0.01);
+				if(bunny.velocity == 0){bunny.jump(); jumpSound.play();}
+			}
+			else if(keydown[KEYBOARD.KEY_RIGHT]){
+				gameState = GAME_STATE_DEFAULT;
+				bunny.moveRight(0.01);
+				if(bunny.velocity == 0){bunny.jump();jumpSound.play();}
+			}
+			if(keydown[KEYBOARD.KEY_DOWN]){
+				gameState = GAME_STATE_DEFAULT;
+				if(!bomb.active){
+					bomb = createBomb(bunny.x+5,bunny.y+5);
+					bombsUsed ++;
+					allBombs++;
+				}
+			}
+			bunny.applyForce(GRAVITY);
+			bunny.update(0.1);
+			
+			//check collisions with the floor
+			for(var i = 0; i < ground.length; i++){
+				//only if ground is not active collision
+				if(ground[i].state == INACTIVE_COLLISION){
+					continue;
+				}
+				//don't let bunny pass floor
+				if(collision(ground[i], bunny)){
+					bunny.x = bunny.prevLocationX;
+					bunny.y = bunny.prevLocationY;
+					bunny.velocity = 0;
+					break; //   ;)
+				}
+			}
+			
+			if(bunny.y > CANVAS_HEIGHT && level === LEVEL_5 && gameState === GAME_STATE_DEFAULT){
+				if(collected != totalCollected){gameState = GAME_STATE_FAIL;}
+				else{gameState = GAME_STATE_END;
+						getLocalStorage();}
+			}else if(bunny.y > CANVAS_HEIGHT && gameState === GAME_STATE_DEFAULT){
+				if(collected != totalCollected){
+					gameState = GAME_STATE_FAIL;
+				}else{
+					gameState = GAME_STATE_ROUND_OVER;
+					level ++;
+					bunny.y = 0;
+					bunny.x = 310;
+				}
+			}
+			
+			bunny.draw(topctx);
+			
+			//make it so bunny can't move beyond screen bounds
+			var paddingX = 0; //normally divide by 2
+			bunny.x = clamp(bunny.x, paddingX, canvas.width - bunny.width);
+			var paddingY = 0;
+			bunny.y = clamp(bunny.y, paddingY, canvas.height - bunny.height);//canvas.height - paddingY);
+		}
+		
+		//Used to generate the floor
+		//*return - the array of floor elements 
+		function createFloor(){
+			if(level === LEVEL_0){
+				//create the array to push to
+				var arr = [];
+				arr.push(createFloorPiece(24.5,30));
+				arr.push(createFloorPiece(24.5,31));
+				arr.push(createFloorPiece(24.5,32));
+				for(var i = 40; i < 48; i++){
+					//loops through horizontally
+					//j starts on the left of the canvas and reaches
+					//the end at (canvaswidth / 10)
+					for(var j = 0; j < 10; j++){
+						//creates the floor elements
+						arr.push(createFloorPiece(i,j));
+						arr.push(createFloorPiece(i,CANVAS_WIDTH/10-j));
+					}//end of horizontal for
+				}//end of vertical for
+				return arr;
+			}else if(level === LEVEL_1){
+				//create the array to push to
+				var arr = [];
+				//loops through vertically
+				//i is the starting height (the position / 10)
+				//i is less than the bottom of the canvas
+				for(var i = 24; i < 48; i++){
+					//loops through horizontally
+					//j starts on the left of the canvas and reaches
+					//the end at (canvaswidth / 10)
+					for(var j = 0; j < CANVAS_WIDTH/10; j++){
+						//creates the floor elements
+						arr.push(createFloorPiece(i,j));
+					}//end of horizontal for
+				}//end of vertical for
+				//returns after loop
+				return arr;
+			 }else if(level === LEVEL_2){
+				//create the array to push to
+				var arr = [];
+				//loops through vertically
+				//i is the starting height (the position / 10)
+				//i is less than the bottom of the canvas
+				for(var i = 10; i < 48; i++){
+					//loops through horizontally
+					//j starts on the left of the canvas and reaches
+					//the end at (canvaswidth / 10)
+					for(var j = 0; j < CANVAS_WIDTH/10; j++){
+						//creates the floor elements
+						arr.push(createFloorPiece(i,j));
+					}//end of horizontal for
+				}//end of vertical for
+				//returns after loop
+				return arr;
+			}else if(level === LEVEL_3){
+				var arr = [];
+				for(var i = 10; i < 48; i++){
+					for(var j = 0; j < CANVAS_WIDTH/10; j++){
+						arr.push(createFloorPiece(i,j));
+					}//end of horizontal for
+				}//end of vertical for
+				//returns after loop
+				return arr;
+			}else if(level === LEVEL_4){
+				var arr = [];
+				for(var i = 35; i < 48; i++){
+					for(var j = 0; j < CANVAS_WIDTH/10; j++){
+						arr.push(createFloorPiece(i,j));
+					}//end of horizontal for
+				}//end of vertical for
+				return arr;
+			}else if(level === LEVEL_5){
+				var arr = [];
+				for(var i = 10; i < 48; i++){
+					for(var j = 0; j < CANVAS_WIDTH/10; j++){
+						arr.push(createFloorPiece(i,j));
+					}//end of horizontal for
+				}//end of vertical for
+				return arr;
+			}
+		}
+		
+		function createFloorPiece(i,j){
+			if(level === LEVEL_0){
+				var floor = {};
+				floor.type = TYPE_WEAK;
+				floor.fillStyle = FILL_STYLE_WEAK;
+				floor.strokeStyle = "black";
+				floor.x = j*10;
+				floor.y = i*10;
+				floor.width = 10;
+				floor.height = 10;
+				floor.radius = 5;
+				floor.state = ACTIVE_COLLISION;
+				return floor;
+			}else if(level === LEVEL_1){
+				var floor = {};
+				if(j < 22 || j > 40){
+					floor.type = TYPE_STRONG;
+					floor.fillStyle = FILL_STYLE_STRONG;
+				}else{
+					floor.type = TYPE_WEAK;
+					floor.fillStyle = FILL_STYLE_WEAK;
+				}
+				floor.strokStyle = "black";
+				floor.x = j*10;
+				floor.y = i*10;
+				floor.width = 10;
+				floor.height = 10;
+				floor.radius = 5;
+				floor.state = ACTIVE_COLLISION;
+				return floor;
+			} else if(level === LEVEL_2){
+				var floor = {};
+				if(i % 20 == 1 || (j % 10 == 1 && i > 34)){
+					floor.type = TYPE_STRONG;
+					floor.fillStyle = FILL_STYLE_STRONG;
+				}else{
+					floor.type = TYPE_WEAK;
+					floor.fillStyle = FILL_STYLE_WEAK;
+				}
+				floor.strokeStyle = "black";
+				floor.x = j*10;
+				floor.y = i*10;
+				floor.width = 10;
+				floor.height = 10;
+				floor.radius = 5;
+				floor.state = ACTIVE_COLLISION;
+				return floor;
+			} else if(level === LEVEL_3){
+				var floor = {};
+				if((i == 10 && (j <= 27 || j >= 37))
+					|| (i == 47 && (j >= 5 && j <= CANVAS_WIDTH/10 - 5))
+					){
+					floor.type = TYPE_IMPOSSIBLE;
+					floor.fillStyle = FILL_STYLE_IMPOSSIBLE;
+					floor.strokeStyle = "gray";
+				}else{
+					floor.type = TYPE_STRONG;
+					floor.fillStyle = FILL_STYLE_STRONG;
+					floor.strokeStyle = "black";
+				}
+				floor.x = j*10;
+				floor.y = i*10;
+				floor.width = 10;
+				floor.height = 10;
+				floor.radius = 5;
+				floor.state = ACTIVE_COLLISION;
+				return floor;
+			}else if(level === LEVEL_4){
+				var floor = {};
+				if(i == 35 && (j <= 10 || j >= 54)){
+					floor.type = TYPE_IMPOSSIBLE;
+					floor.fillStyle = FILL_STYLE_IMPOSSIBLE;
+					floor.strokeStyle = "gray";
+				}else{
+					floor.type = TYPE_STRONG;
+					floor.fillStyle = FILL_STYLE_STRONG;
+					floor.strokeStyle = "black";
+				}
+				floor.x = j*10;
+				floor.y = i*10;
+				floor.width = 10;
+				floor.height = 10;
+				floor.radius = 5;
+				floor.state = ACTIVE_COLLISION;
+				return floor;
+			}else if(level === LEVEL_5){
+				var floor = {};
+				if(i > 38 && i < 47){floor.state = INACTIVE_COLLISION; return floor;}
+				if(i == 38 && j <= 50 || (i == 47 && j > 8)){
+					floor.type = TYPE_IMPOSSIBLE;
+					floor.fillStyle = FILL_STYLE_IMPOSSIBLE;
+					floor.strokeStyle = "gray";
+				}else{
+					floor.type = TYPE_STRONG;
+					floor.fillStyle = FILL_STYLE_STRONG;
+					floor.strokeStyle = "black";
+				}
+				floor.x = j*10;
+				floor.y = i*10;
+				floor.width = 10;
+				floor.height = 10;
+				floor.radius = 5;
+				floor.state = ACTIVE_COLLISION;
+				return floor;
+			}
+		}
+		
+		function createBomb(x,y){
+			var bomb = {};
+			bomb.radius = 5;
+			bomb.x = x;
+			bomb.y = y+5;
+			bomb.waitTime = 0;
+			bomb.explosionTime = 0;
+			bomb.fillStyle = "black";
+			bomb.width = 10;
+			bomb.height = 10;
+			bomb.state = 0;
+			bomb.active = true;
+			return bomb;
+		}
+		
+		//Handles when the mouse is clicked. 
+		function doMousedown(e){
+			
+		}
+		
+		//This method handles both bomb explosion and when we need to
+		//update the floor.
+		function checkForExplosion(){
+			if(bomb.active){
+				//if the bomb has just been placed and hasn't exploded yet
+				if(bomb.state == BOMB_STATE_WAITING)
+				{
+					bomb.waitTime += 1;
+					if(bomb.waitTime >= WAIT_SPEED){
+						bomb.state = BOMB_STATE_EXPLODING;
+					}	
+				//if the bomb is exploding
+				}else if(bomb.state === BOMB_STATE_EXPLODING){
+					bombExplosionSound.play();
+					bomb.radius += EXPLOSION_SPEED;
+					if(bomb.radius >= MAX_RADIUS){
+						bomb.state = BOMB_STATE_IMPLODING;
+						checkFloorCollision(bomb);
+						drawFloor();
+						//if bomb hits the bunny
+						if(circlesIntersect(bunny,bomb)){bunny.hurt = true;}
+						for(var i = 0; i < fireBlocks.length; i++){
+							if(circlesIntersect(fireBlocks[i],bomb)){
+								fireBlocks[i].active = false;
+							}
+						}
+					}
+				//if the bomb is imploding
+				}else if(bomb.state === BOMB_STATE_IMPLODING){
+					bomb.radius -= IMPLOSION_SPEED;
+					if(bomb.radius <= 0){
+						bomb.active = false;
+					}
+				}
+				drawBomb();
+			}
+		}
+		
+		function tntExplosion(t){
+			if(t.state === t.TNT_STATE_FINISHED){
+				return;
+			}
+		
+			if(t.state === t.TNT_STATE_IDLE && bomb.state === BOMB_STATE_EXPLODING){
+				
+				if(circlesIntersect(t,bomb)){
+					tntExplosionSound.play();
+					t.state = t.TNT_STATE_EXPLODING;
+				}
+			}
+		
+			//if the bomb has just been placed and hasn't exploded yet
+			if(t.state === t.TNT_STATE_IDLE)
+			{
+			
+			//if the bomb is exploding
+			}else if(t.state === t.TNT_STATE_EXPLODING){
+				t.radius += t.EXPLOSION_SPEED;
+				if(t.radius >= t.MAX_RADIUS){
+					t.state = t.TNT_STATE_IMPLODING;
+					checkFloorCollision(t);
+					for(var i = 0; i < tnts.length; i++){
+						if(tnts[i] === t){
+							continue;
+						}
+						if(circlesIntersect(tnts[i],t) && tnts[i].state === t.TNT_STATE_IDLE)
+						{tnts[i].state = tnts[i].TNT_STATE_EXPLODING; tntExplosionSound.play();}
+					}
+					drawFloor();
+					//if the bunny gets hit
+					if(circlesIntersect(bunny,t)){bunny.hurt = true;}
+					for(var i = 0; i < fireBlocks.length; i++){
+						if(circlesIntersect(fireBlocks[i],t)){
+							fireBlocks[i].active = false;
+						}
+					}
+				}
+			//if the bomb is imploding
+			}else if(t.state === t.TNT_STATE_IMPLODING){
+				t.radius -= t.IMPLOSION_SPEED;
+				if(t.radius <= 0){
+					t.state = t.TNT_STATE_FINISHED;
+				}
+			}
+			t.draw(topctx);
+		}
+		
+		function checkFloorCollision(b){
+			for(var i = 0; i < ground.length; i++){
+				var f = ground[i];
+				if(f.state == INACTIVE_COLLISION){
+					continue;
+				}	
+				if(f.state == ACTIVE_COLLISION){
+					if(circlesIntersect(f,b)){
+						if(f.type === TYPE_WEAK){
+							f.state = INACTIVE_COLLISION;
+							continue;
+						}
+						if(f.type === TYPE_STRONG){
+							f.type --;
+							f.fillStyle = FILL_STYLE_WEAK;
+							continue;
+						}
+					}//end of intersects if
+				}//end of if ACTIVE_COLLISION
+			}//end of for
+		}//end of method
+		
+		function checkGoal(){
+			for(var i = 0; i < collectables.length; i++){
+				if(collision(collectables[i],bunny) && collectables[i].active){
+					collectables[i].active = false;
+					collectables[i].clear(topctx);
+					collected ++;
+					collectSound.play();
+				}
+			}
+		}
+		
+		
+		//drawing
+		
+		//Used to draw the floor
+		function drawFloor(){
+			ctx.drawImage(img,0,0);
+			//loop through the ground elements
+			for(var i = 0; i < ground.length; i++){
+				//draw a rectangle at the objects parameters
+				var f = ground[i];
+				if(f.state == INACTIVE_COLLISION){
+					continue;
+				}
+				if(f.state == ACTIVE_COLLISION){
+					ctx.fillStyle = f.fillStyle;
+					ctx.strokeStyle = f.strokeStyle;
+					ctx.fillRect(f.x,f.y,f.width,f.height);
+					ctx.strokeRect(f.x,f.y,f.width,f.height);
+					continue;
+				}//end of if
+			}//end of for loop
+		}//end of function
+		
+		function drawBomb(){
+			if(bomb.active){
+				topctx.fillStyle = bomb.fillStyle;
+				topctx.beginPath();
+				topctx.arc(bomb.x,bomb.y,bomb.radius,0,Math.PI*2,false);
+				topctx.closePath();
+				topctx.fill();
+			}
+		}
+		
+		function drawText(string,x,y,size,color){
+			topctx.font = 'bold ' + size + 'px Rockwell Extra Bold, Rockwell Bold, monospace';
+			topctx.fillStyle = color;
+			topctx.fillText(string,x,y);
+		}
+		
+		//Drawing
+		function drawHUD(){
+			
+			if(gameState === GAME_STATE_DEFAULT){
+				drawText(collected + ": " + totalCollected + " Food" ,5,20,20,"black");
+				drawText(bombsUsed + ": Par " + parBombs,5,50,20,"black");
+			
+				if(localStorage.getItem('bombs')){
+					drawText("Your best score: " + localStorage.getItem('bombs'),250,10,12,"black");	
+				}
+				
+				for(var i = bunny.health; i > 0; i--){
+				topctx.save();
+				topctx.fillStyle = bunny.color;
+				topctx.fillRect(CANVAS_WIDTH - 10 - (i * 10),10,10,14);
+				topctx.strokeRect(CANVAS_WIDTH - 10 - (i * 10),10,10,14);
+				topctx.restore();
+				}
+				
+				if(level === LEVEL_0){
+					drawText("Begin by moving your player (<^>)", 50,CANVAS_HEIGHT/4,25,"gray");
+				}
+				
+				if(level === LEVEL_1){
+					drawText("Place a bomb with the 'down arrow'.",40,CANVAS_HEIGHT/4+30,25,"gray");
+				}
+				
+				return;
+			}
+			
+			if(gameState === GAME_STATE_ROUND_OVER){
+				topctx.save();
+				topctx.globalAlpha=0.8;
+				topctx.fillStyle = '#ddddff';
+				topctx.fillRect(0,0,CANVAS_WIDTH,155);
+				topctx.restore();
+				
+				drawText("Congrats! You finished the level!",90,20,25,"red");
+				drawText("You used " + bombsUsed + " bombs of par " + parBombs,CANVAS_WIDTH/4-10,50,20,"gray");
+				drawText("You got " + collected + " of " + totalCollected + " collectables",CANVAS_WIDTH/4,85,20,"gray");
+				drawText("Press 'Space' to continue.",CANVAS_WIDTH/4-30,115,25,"red");
+				drawText("Press 'R' to try again!", CANVAS_WIDTH/4+30,145,18,"red");
+				return;
+			}
+			if(gameState === GAME_STATE_ROUND_LOOSE){
+				topctx.save();
+				topctx.globalAlpha=0.8;
+				topctx.fillStyle = '#ddddff';
+				topctx.fillRect(0,0,CANVAS_WIDTH,130);
+				topctx.restore();
+				drawText("You have died! :'(",175,50,25,"red");
+				drawText("Try to avoid the blasts!",172,80,20,"black");
+				drawText("Press 'Space' to restart.",CANVAS_WIDTH/4-30,110,25,"red");
+			}
+			
+			if(gameState === GAME_STATE_FAIL){
+				drawText("You didn't collect all the food!",80,50,25,"white");
+				drawText("Press 'Space' to restart.",CANVAS_WIDTH/4-30,85,25,"red");
+			}
+			
+			if(gameState === GAME_STATE_END){
+				topctx.save();
+				topctx.globalAlpha=0.8;
+				topctx.fillStyle = '#ddddff';
+				topctx.fillRect(0,0,CANVAS_WIDTH,170);
+				topctx.restore();
+				
+				drawText("Awesome! You beat the game!!",65,25,30,"blue");
+				drawText("You used " + bombsUsed + " bombs of par " + parBombs,CANVAS_WIDTH/4,55,20,"gray");
+				drawText("You got " + collected + " of " + totalCollected + " collectables",CANVAS_WIDTH/4,90,20,"gray");
+			
+				if(localStorage.getItem('bombs')){
+					drawText("Fewest bombs used:",120,130,30,"blue");
+					drawText("1. " + localStorage.getItem('bombs'),270,160,20,"gray");		
+				}
+			
+			}
+		}
+		
+		
+		function loadLevel(l){
+			if(l === LEVEL_0){
+				drawFloor();
+				bunny.x = 310;
+				bunny.y = 100;
+				
+			}else if(l === LEVEL_1){
+				bunny.x = 310;
+				bunny.y = 85;
+				ground = createFloor();
+				drawFloor();
+				parBombs = 6;
+				//create goals
+				goal = new collectible();
+				goal.init();
+				goal.x = 310;
+				goal.y = 400;
+				collectables.push(goal);
+				totalCollected = 1;
+				//create tnt
+				tnt1 = new tnt();
+				tnt1.init(CANVAS_WIDTH/2-10, 340);
+				tnts.push(tnt1);
+			}else if(l === LEVEL_2){
+				bunny.x = 310;
+				bunny.y = 85;
+				parBombs = 14;
+				ground = createFloor();
+				drawFloor();
+				collectables = level2();
+				totalCollected = 4;
+				tnt1 = new tnt();
+				tnt1.init(CANVAS_WIDTH/2-10, 340);
+				tnts.push(tnt1);
+				
+				tnt2 = new tnt();
+				tnt2.init(CANVAS_WIDTH/4-10, 250);
+				tnts.push(tnt2);
+				
+				tnt3 = new tnt();
+				tnt3.init(CANVAS_WIDTH*3/4-10, 250);
+				tnts.push(tnt3);
+				for(var i = 0; i < 15; i++){
+					tnti = new tnt();
+					tnti.init(i*50, 160);
+					tnts.push(tnti);
+				}
+				
+			}else if(l === LEVEL_3){
+				bunny.x = 310;
+				bunny.y = 85;
+				parBombs = 20;
+				ground = createFloor();
+				//makes the floor impressions
+				var b = {};
+				b.x = 100;
+				b.y = 200;
+				b.radius = 45;
+				checkFloorCollision(b);
+				b.x = 530;
+				b.y = 200;
+				b.radius = 45;
+				checkFloorCollision(b);
+				b.x = 160;
+				b.y = 310;
+				b.radius = 35;
+				checkFloorCollision(b);
+				b.x = 470;
+				b.y = 310;
+				b.radius = 35;
+				checkFloorCollision(b);
+				b.x = CANVAS_WIDTH/2;
+				b.y = 390;
+				b.radius = 85;
+				checkFloorCollision(b);
+				b.x = CANVAS_WIDTH/2;
+				b.y = 390;
+				b.radius = 45;
+				checkFloorCollision(b);
+				
+				b.x = 0;
+				b.y = CANVAS_HEIGHT - 40;
+				b.radius = 85;
+				checkFloorCollision(b);
+				b.x = CANVAS_WIDTH;
+				b.y = CANVAS_HEIGHT - 40;
+				b.radius = 85;
+				checkFloorCollision(b);
+				
+				drawFloor();
+				totalCollected = 3;
+				
+				//adding all of the tnt's
+				tnt1 = new tnt();
+				tnt1.init(130, 260);
+				tnts.push(tnt1);
+				tnt2 = new tnt();
+				tnt2.init(500, 260);
+				tnts.push(tnt2);
+				tnt3 = new tnt();
+				tnt3.init(CANVAS_WIDTH/2-80, 350);
+				tnts.push(tnt3);
+				tnt4 = new tnt();
+				tnt4.init(CANVAS_WIDTH/2+80, 350);
+				tnts.push(tnt4);
+				tnt5 = new tnt();
+				tnt5.init(CANVAS_WIDTH/2, 310);
+				tnts.push(tnt5);
+				tnt6 = new tnt();
+				tnt6.init(CANVAS_WIDTH/2-50, 320);
+				tnts.push(tnt6);
+				tnt7 = new tnt();
+				tnt7.init(CANVAS_WIDTH/2+50, 320);
+				tnts.push(tnt7);
+				
+				//doing the collectables
+				goal = new collectible();
+				goal.init();
+				goal.x = 320;
+				goal.y = 390;
+				collectables.push(goal);
+				goal1 = new collectible();
+				goal1.init();
+				goal1.x = 100;
+				goal1.y = 200;
+				collectables.push(goal1);
+				goal2 = new collectible();
+				goal2.init();
+				goal2.x = 530;
+				goal2.y = 200;
+				collectables.push(goal2);
+				
+			}else if(level === LEVEL_4){
+				bunny.y = 330;
+				parBombs = 2;
+				totalCollected = 2;
+				
+				ground = createFloor();
+				
+				fire = new fireBlock();
+				fire.init(25,340,-100);
+				fireBlocks.push(fire);
+				fire1 = new fireBlock();
+				fire1.init(CANVAS_WIDTH-70,340,-100);
+				fireBlocks.push(fire1);
+				
+				goal = new collectible();
+				goal.init();
+				goal.x = 45;
+				goal.y = 280;
+				collectables.push(goal);
+				goal1 = new collectible();
+				goal1.init();
+				goal1.x = CANVAS_WIDTH-50;
+				goal1.y = 280;
+				collectables.push(goal1);
+				
+				tnt1 = new tnt();
+				tnt1.init(310, 360);
+				tnts.push(tnt1);
+				tnt3 = new tnt();
+				tnt3.init(CANVAS_WIDTH/2-100, 410);
+				tnts.push(tnt3);
+				tnt4 = new tnt();
+				tnt4.init(CANVAS_WIDTH/2+80, 410);
+				tnts.push(tnt4);
+				tnt6 = new tnt();
+				tnt6.init(CANVAS_WIDTH/2-60, 380);
+				tnts.push(tnt6);
+				tnt7 = new tnt();
+				tnt7.init(CANVAS_WIDTH/2+40, 380);
+				tnts.push(tnt7);
+				tnt2 = new tnt();
+				tnt2.init(CANVAS_WIDTH/2-140, 440);
+				tnts.push(tnt2);
+				tnt5 = new tnt();
+				tnt5.init(CANVAS_WIDTH/2+120, 440);
+				tnts.push(tnt5);
+				tnt8 = new tnt();
+				tnt8.init(CANVAS_WIDTH/2-150, 470);
+				tnts.push(tnt8);
+				tnt9 = new tnt();
+				tnt9.init(CANVAS_WIDTH/2+130, 470);
+				tnts.push(tnt9);
+				
+				drawFloor();
+			}else if(level = LEVEL_5){
+				bunny.y = 85;
+				bunny.x = 310;
+				ground = createFloor();
+				
+				var b = {};
+				b.x = 310;
+				b.y = 190;
+				b.radius = 95;
+				checkFloorCollision(b);
+				checkFloorCollision(b);
+				b.x = 310;
+				b.y = 280;
+				b.radius = 95;
+				checkFloorCollision(b);
+				checkFloorCollision(b);
+				b.x = 200;
+				b.y = 280;
+				b.radius = 75;
+				checkFloorCollision(b);
+				b.x = 420;
+				b.y = 280;
+				b.radius = 75;
+				checkFloorCollision(b);
+				
+				fire = new fireBlock();
+				fire.init(310,460,-80);
+				fireBlocks.push(fire);
+				fire1 = new fireBlock();
+				fire1.init(70,460,-20);
+				fireBlocks.push(fire1);
+				fire2 = new fireBlock();
+				fire2.init(CANVAS_WIDTH-70,460,-90);
+				fireBlocks.push(fire2);
+				fire3 = new fireBlock();
+				fire3.init(350,460,-83);
+				fireBlocks.push(fire3);
+				fire4 = new fireBlock();
+				fire4.init(250,460,-50);
+				fireBlocks.push(fire4);
+				
+				drawFloor();
+				
+				goal = new collectible();
+				goal.init();
+				goal.x = 220;
+				goal.y = 150;
+				collectables.push(goal);
+				goal1 = new collectible();
+				goal1.init();
+				goal1.x = CANVAS_WIDTH-240;
+				goal1.y = 150;
+				collectables.push(goal1);
+				goal2 = new collectible();
+				goal2.init();
+				goal2.x = 40;
+				goal2.y = 460;
+				collectables.push(goal2);
+				totalCollected = 3;
+				parBombs = 4;
+				
+				for(var i = 4; i < 10; i++){
+					tnti = new tnt();
+					tnti.init(100, i*50);
+					tnts.push(tnti);
+					tnti2 = new tnt();
+					tnti2.init(CANVAS_WIDTH-110, i*50);
+					tnts.push(tnti2);
+				}
+				for(var i = 3; i < 5; i++){
+					tnti = new tnt();
+					tnti.init(i*50,370);
+					tnts.push(tnti);
+					tnti2 = new tnt();
+					tnti2.init(CANVAS_WIDTH-10-(i*50),370);
+					tnts.push(tnti2);
+				}
+			}
+		}
+		
+		function getLocalStorage(){
+			localStorage.setItem('bombs',allBombs);
+			
+		}
+		
+		//Utilities
+		
+		//So my shit doesn't fly off the screen
+		function clamp(val, min, max){
+			return Math.max(min, Math.min(max, val));
+		}
+		
+		//*param 'f' - the floor object
+		//*param 'b' - the bomb object
+		function circlesIntersect(f,b){
+			var dx = b.x - f.x;
+			var dy = b.y - f.y;
+			var distance = Math.sqrt(dx*dx + dy*dy);
+			return distance < f.radius + b.radius;
+		}
+		
+		//Function used to see if a cube had been clicked.
+		//*param 'x' - the x mouse parameter
+		//*param 'y' - the y mouse parameter
+		//*param 'I' - the floor object
+		//*return - true or false if x and y are inside of I
+		function pointInsideCube(x,y,I){
+			return x <= I.width+I.x && x >= I.x && y <= I.height+I.y && y >= I.y;
+		}
+		
+		//Gets the mouse position
+		//*param 'e' - the mouse event
+		//*return - the mouse object
+		function getMouse(e){
+			var mouse = {}
+			mouse.x = e.pageX - e.target.offsetLeft;
+			mouse.y = e.pageY - e.target.offsetTop;
+			return mouse;
+		}
+		
+		//rectangle collision for bunny and floor for example
+		function collision(rect1, rect2){
+			if(rect1.x + rect1.width > rect2.x && rect1.x < rect2.x + rect2.width){
+				if(rect1.y + rect1.height > rect2.y && rect1.y < rect2.y + rect2.height){
+					return true;
+				}
+			}
+			return false;
+		}
+		
+		function changeColors(){
+			FILL_STYLE_WEAK = "#4FB6FF";
+			FILL_STYLE_STRONG = "#3DC081";
+			FILL_STYLE_IMPOSSIBLE = "black";
+			for(var i = 0; i < ground.length; i++){
+				if(ground[i].type === TYPE_WEAK){ground[i].fillStyle=FILL_STYLE_WEAK;}
+				if(ground[i].type === TYPE_STRONG){ground[i].fillStyle=FILL_STYLE_STRONG;}
+				if(ground[i].type === TYPE_IMPOSSIBLE){ground[i].fillStyle=FILL_STYLE_IMPOSSIBLE;}
+				ground[i].strokeStyle = "gray";
+			}
+			drawFloor();
+		}
+	
+	}());
+	
+	</script>
+
+</head>
+
+<body>
+
+	<div id="container">
+	<canvas id="mainCanvas" width="640" height="480">
+		get a real browser
+	</canvas>
+	
+	<canvas id="topCanvas" width="640" height="480">
+		get a real browser!
+	</canvas>
+	
+	<input type="button" style="float:right;" id="colorChange" value="colorChange"></input>
+	
+	</div>
+	
+	<?php include("../navigationBar.php"); ?>
+	
+	<script src="js/bunny.js"></script>
+	<script src="js/tnt.js"></script>
+	<script src="js/Collectible.js"></script>
+	<script src="js/tnt.js"></script>
+	<script src="js/loadLevel.js"></script>
+	<script src="js/fireBlock.js"></script>
+
+
+</body>
+
+</html>
